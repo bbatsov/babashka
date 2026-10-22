@@ -100,54 +100,44 @@
    :classpath (cp/split-classpath (cp/get-classpath))})
 
 (defn wrap-babashka
-  "Returns a handler that answers the cider-nrepl ops `complete`, `eldoc`,
-  `info`, `ns-list` and `classpath` under their `cider/` and bare names."
+  "Middleware that adds babashka's versions to `describe`. The cider-nrepl
+  ops it used to answer come from `cider-middleware` now."
   [h]
   (fn [{:keys [op] :as msg}]
     (if (= "describe" op)
       (h (assoc msg :transport (versions-transport (:transport msg))))
-      (safe-handle msg
-        "cider/complete" complete-reply
-        "complete" complete-reply
-        "cider/eldoc" lookup-reply
-        "eldoc" lookup-reply
-        "cider/info" lookup-reply
-        "info" lookup-reply
-        "cider/ns-list" ns-list-reply
-        "ns-list" ns-list-reply
-        "cider/classpath" classpath-reply
-        "classpath" classpath-reply
-        :else h))))
+      (h msg))))
 
 (set-descriptor! #'wrap-babashka
                  {:requires #{"clone"}
                   :expects #{}
-                  :handles (cider/with-cider-names
-                            {"complete"
-                             {:doc "Completions of a prefix."
-                              :requires {"prefix" "The prefix to complete."}
-                              :optional {"ns" "The namespace to complete in. Defaults to the session's."}
-                              :returns {"completions" "Maps with `candidate`, `type` and `ns`."}}
-                             "eldoc"
-                             {:doc "Arglists and docstring of a symbol."
-                              :requires {"sym" "The symbol to look up."}
-                              :optional {"ns" "The namespace to resolve in."}
-                              :returns {"eldoc" "The arglists, each a list of strings."}}
-                             "info"
-                             {:doc "Metadata of a symbol."
-                              :requires {"sym" "The symbol to look up."}
-                              :optional {"ns" "The namespace to resolve in."}
-                              :returns {}}
-                             "ns-list"
-                             {:doc "The names of all namespaces."
-                              :requires {}
-                              :optional {"filter-regexps" "Regexes of namespaces to leave out."}
-                              :returns {"ns-list" "The sorted names."}}
-                             "classpath"
-                             {:doc "The classpath entries."
-                              :requires {}
-                              :optional {}
-                              :returns {"classpath" "A list of paths."}}})})
+                  :handles {}})
+
+(def ^:private cider-middleware
+  "The cider-nrepl middleware that runs in bb, from upstream's
+  cider.nrepl/cider-middleware. Left out: content-type and slurp (classes
+  not registered), format (cljfmt), log (logjam), out (reify of
+  ThreadFactory), refresh and reload (tools.namespace reload, clj-reload),
+  tap (Transport imported as a class), xref (walks fn classes)."
+  '[cider.nrepl/wrap-apropos
+    cider.nrepl/wrap-classpath
+    cider.nrepl/wrap-clojuredocs
+    cider.nrepl/wrap-complete
+    cider.nrepl/wrap-debug
+    cider.nrepl/wrap-enlighten
+    cider.nrepl/wrap-info
+    cider.nrepl/wrap-inspect
+    cider.nrepl/wrap-macroexpand
+    cider.nrepl/wrap-ns
+    cider.nrepl/wrap-profile
+    cider.nrepl/wrap-resource
+    cider.nrepl/wrap-spec
+    cider.nrepl/wrap-stacktrace
+    cider.nrepl/wrap-test
+    cider.nrepl/wrap-trace
+    cider.nrepl/wrap-tracker
+    cider.nrepl/wrap-undef
+    cider.nrepl/wrap-version])
 
 (defn- middleware-var [m]
   (if (symbol? m) (requiring-resolve m) m))
@@ -165,12 +155,9 @@
     :or {host "127.0.0.1" port 1667}}
    wrap-handler]
   (reset! versions (walk/keywordize-keys (get describe "versions" (:versions describe))))
-  (let [handler (wrap-handler (apply server/default-handler #'wrap-babashka #'cider/wrap-cider #'clojuredocs/wrap-clojuredocs #'debug/wrap-debug #'track-state/wrap-track-state
-                                     (map middleware-var middleware)))
-        ;; a session's first eval cannot arrive before the clone reply
-        handler (fn [msg]
-                  (when (= "clone" (:op msg)) (debug/load!) (track-state/load!))
-                  (handler msg))
+  (let [handler (wrap-handler (apply server/default-handler #'wrap-babashka
+                                     (concat (map requiring-resolve cider-middleware)
+                                             (map middleware-var middleware))))
         srv (if socket
               (server/start-server :socket socket :handler handler)
               (server/start-server :bind host :port port :handler handler))

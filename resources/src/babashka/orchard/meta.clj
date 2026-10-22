@@ -71,9 +71,12 @@
                    :code code)))))))
 
 (defn meta+
-  "Returns the metadata of var v."
+  "Returns the metadata of var v, or a name for a special form symbol, which
+  orchard.apropos adds to the vars it searches."
   [v]
-  (meta v))
+  (if (and (symbol? v) (special-symbol? v))
+    {:name v :special-form true}
+    (meta v)))
 
 (defn var-name
   "Return special form or var's namespace-qualified name as string."
